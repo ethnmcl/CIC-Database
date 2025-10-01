@@ -1,12 +1,16 @@
 FROM python:3.11-slim
 
+# System deps (build tools for some wheels)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Python deps
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
+# App
 COPY main.py /app/
 
 ENV PYTHONDONTWRITEBYTECODE=1
