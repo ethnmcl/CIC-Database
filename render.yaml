@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: checkins-search-api
+    env: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: MODEL_NAME
+        value: BAAI/bge-small-en-v1.5
+      - key: TZ
+        value: America/New_York
