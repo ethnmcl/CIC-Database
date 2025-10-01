@@ -9,7 +9,8 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
-API_KEY = os.getenv("API_KEY")
+# --- Env ---
+API_KEY = os.getenv("API_KEY")  # your own shared secret for this API
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "BAAI/bge-small-en-v1.5")
@@ -20,7 +21,9 @@ if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
 
 app = FastAPI(title="Check-ins Search API (Supabase RPC)", version="1.0.0")
 
+# --- Auth guard ---
 def require_key(authorization: Optional[str] = Header(None)):
+    # If API_KEY is unset, routes are open (handy for local), otherwise require Bearer
     if not API_KEY:
         return
     if not authorization or not authorization.startswith("Bearer "):
@@ -28,7 +31,7 @@ def require_key(authorization: Optional[str] = Header(None)):
     if authorization.split(" ", 1)[1].strip() != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid token")
 
-# Startup: load model + HTTP client
+# --- Startup/shutdown ---
 @app.on_event("startup")
 async def on_startup():
     app.state.model = SentenceTransformer(MODEL_NAME)
@@ -50,6 +53,7 @@ async def on_shutdown():
     except Exception:
         pass
 
+# --- Helpers ---
 def embed_text(texts: List[str]) -> List[List[float]]:
     vecs = app.state.model.encode(texts, normalize_embeddings=True)
     return [v.tolist() for v in vecs]
@@ -83,14 +87,14 @@ def parse_phrase_to_range(phrase: str) -> Dict[str, str]:
 def to_utc_iso(local_iso: str) -> str:
     return datetime.fromisoformat(local_iso).astimezone(pytz.UTC).isoformat()
 
-# Schemas
+# --- Schemas ---
 class IngestBody(BaseModel):
     id: str
     sender: Optional[str] = None
     username: Optional[str] = None
     slack_id: Optional[str] = None
     msg: str
-    timestamp: Optional[str] = None
+    timestamp: Optional[str] = Field(None, description="ISO8601; if absent, now()")
     tags: Optional[List[str]] = []
     valid_checkin: Optional[bool] = True
 
@@ -107,6 +111,7 @@ class SearchBody(BaseModel):
     filters: Optional[SearchFilters] = None
     return_fields: List[str] = ["id","ts","sender","username","msg","score"]
 
+# --- Endpoints ---
 @app.get("/healthz")
 async def health():
     return {"ok": True, "model": MODEL_NAME}
@@ -139,9 +144,8 @@ async def ingest(body: IngestBody, _: None = Depends(require_key)):
         "_embedding": vec,
     }
 
-    # Call RPC
-    url = "/rpc/upsert_checkin"
-    r = await app.state.http.post(url, json=payload)
+    # RPC: upsert_checkin
+    r = await app.state.http.post("/rpc/upsert_checkin", json=payload)
     if r.status_code >= 300:
         raise HTTPException(r.status_code, detail=f"Supabase RPC error: {r.text[:300]}")
     return {"ok": True, "id": body.id}
@@ -172,7 +176,7 @@ async def search(body: SearchBody, _: None = Depends(require_key)):
     r = await app.state.http.post("/rpc/search_checkins", json=payload)
     if r.status_code >= 300:
         raise HTTPException(r.status_code, detail=f"Supabase RPC error: {r.text[:300]}")
-    rows = r.json()  # list of dicts
+    rows = r.json()
 
     # trim to requested fields
     out = []
