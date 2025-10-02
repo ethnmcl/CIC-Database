@@ -43,7 +43,7 @@ TIME_PATTERNS = [
     r"\b(january|february|march|april|may|june|july|august|september|october|november|december)(?:\s+\d{4})?\b",
 ]
 
-app = FastAPI(title="Check-ins Search API (Supabase RPC)", version="1.2.0")
+app = FastAPI(title="Check-ins Search API (Supabase RPC)", version="1.3.0")
 
 # === Auth guard ===
 def require_key(authorization: Optional[str] = Header(None)):
@@ -115,7 +115,7 @@ def extract_time_subphrase(text: str, tz: pytz.BaseTzInfo) -> Optional[str]:
     }
     found = search_dates(s, settings=settings, languages=["en"])
     if found:
-        return found[0][0]  # return the matched substring (e.g., "july 2025")
+        return found[0][0]  # matched substring (e.g., "july 2025")
     return None
 
 def parse_phrase_to_range(
@@ -269,6 +269,7 @@ class InterpretOptions(BaseModel):
     infer_sender: Optional[str] = None
     k: int = 20
     return_fields: List[str] = ["id","ts","sender","username","msg","score"]
+    run_search: bool = True   # NEW: run semantic search and include results
 
 class InterpretBody(BaseModel):
     text: str
@@ -385,6 +386,9 @@ async def stats(
     }
 
 # === /interpret ===
+class InterpretResponse(BaseModel):
+    ok: bool
+
 @app.post("/interpret")
 async def interpret(body: InterpretBody, _: None = Depends(require_key)):
     """
@@ -392,6 +396,7 @@ async def interpret(body: InterpretBody, _: None = Depends(require_key)):
       - cleaned query text (non-time words)
       - detected time range (start/end in local tz)
       - ready-to-use /search payload
+      - optionally, immediate semantic search results (run_search=True)
     """
     text = (body.text or "").strip()
     if not text:
@@ -473,6 +478,37 @@ async def interpret(body: InterpretBody, _: None = Depends(require_key)):
         "return_fields": opt.return_fields
     }
 
+    # NEW: optionally run the semantic search now and include results
+    results = None
+    if opt.run_search:
+        # embed query
+        q_vec = embed_text([search_payload["query"]])[0]
+
+        # convert local window to UTC for the RPC
+        start_utc = to_utc_iso(search_payload["filters"]["start"])
+        end_utc   = to_utc_iso(search_payload["filters"]["end"])
+
+        rpc_payload = {
+            "q_embedding": q_vec,
+            "k": search_payload["k"],
+            "start_ts": start_utc,
+            "end_ts": end_utc,
+            "sender_eq": search_payload["filters"]["sender"],
+            "valid_only": search_payload["filters"].get("valid_only")
+        }
+        r2 = await app.state.http.post("/rpc/search_checkins", json=rpc_payload)
+        if r2.status_code >= 300:
+            raise HTTPException(r2.status_code, detail=f"Supabase RPC error: {r2.text[:300]}")
+        rows = r2.json()
+
+        # trim to requested fields
+        results = []
+        for row in rows:
+            item = {f: row.get(f) for f in opt.return_fields if f in row or f == "score"}
+            if "score" in item and item["score"] is not None:
+                item["score"] = float(item["score"])
+            results.append(item)
+
     resp: Dict[str, Any] = {
         "ok": True,
         "input": {
@@ -493,5 +529,7 @@ async def interpret(body: InterpretBody, _: None = Depends(require_key)):
     }
     if suggestions and (not used_fallback):
         resp["suggestions"] = suggestions
+    if results is not None:
+        resp["results"] = results
 
     return resp
