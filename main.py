@@ -11,9 +11,10 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 from dateutil.relativedelta import relativedelta
+from fastapi.middleware.cors import CORSMiddleware
 
 # === Environment ===
-API_KEY = os.getenv("API_KEY")  # your shared secret for this API
+API_KEY = os.getenv("API_KEY")  # your shared secret for this API (optional)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "BAAI/bge-small-en-v1.5")
@@ -44,6 +45,22 @@ TIME_PATTERNS = [
 ]
 
 app = FastAPI(title="Check-ins Search API (Supabase RPC)", version="1.3.0")
+
+# === CORS (allow Base44 app + local dev) ===
+ALLOWED_ORIGINS = [
+    "https://flow-state-d25e6b4b.base44.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,    # set to ["*"] temporarily if debugging
+    allow_credentials=False,          # True only if you need cookies/auth
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
+    expose_headers=["Content-Type"],
+    max_age=600,
+)
 
 # === Auth guard ===
 def require_key(authorization: Optional[str] = Header(None)):
